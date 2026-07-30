@@ -1,21 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-# start SSH service
-sudo service ssh start
-
-# start MongoDB service
-sudo mkdir -p /data/db
-sudo chown -R `id -u` /data/db
-sudo mongod --fork --logpath /var/log/mongod.log
-
-# wait for MongoDB
-sleep 10
-
-# import mongodb data
-sudo mongorestore --db cranelift /home/ubuntu/mongodb_ir
-
-# bash
-exec /bin/bash
-
-# 启动容器
-# docker run -it wasmaker
+# Backward-compatible wrapper. The Docker image invokes entrypoint.sh directly.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "$#" -eq 0 ]]; then
+    set -- help
+fi
+exec "${SCRIPT_DIR}/scripts/entrypoint.sh" "$@"

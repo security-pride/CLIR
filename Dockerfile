@@ -1,71 +1,82 @@
-FROM ubuntu:22.04
+# syntax=docker/dockerfile:1
 
-# set noninteractive installation
-ENV DEBIAN_FRONTEND=noninteractive
+ARG UBUNTU_VERSION=22.04
+ARG RUST_VERSION=1.91.0
 
-# set timezone
-RUN ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime && echo "Etc/UTC" > /etc/timezone
+FROM ubuntu:${UBUNTU_VERSION} AS builder
 
-ENV USER=ubuntu
-ENV PASSWD=CLIR
-ENV WORKDIR=CLIR
+ARG RUST_VERSION
+ENV DEBIAN_FRONTEND=noninteractive \
+    CARGO_HOME=/opt/cargo \
+    RUSTUP_HOME=/opt/rustup \
+    PATH=/opt/cargo/bin:${PATH}
 
-# set apt mirror to tsinghua
-RUN printf '\n\
-deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy main restricted universe multiverse \n\
-deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-updates main restricted universe multiverse \n\
-deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-backports main restricted universe multiverse \n\
-deb http://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-security main restricted universe multiverse' > /etc/apt/sources.list
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install --fix-missing --yes --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        pkg-config
 
+RUN curl --proto '=https' --tlsv1.2 \
+        --fail --silent --show-error --location --retry 5 --retry-all-errors \
+        https://sh.rustup.rs \
+        | sh -s -- -y --profile minimal --default-toolchain "${RUST_VERSION}"
 
-# install packages
-RUN apt-get update \
-  && apt-get install -y ssh openssh-server build-essential \
-    gcc g++ gdb gdbserver cmake \
-    libboost-dev \
-    net-tools tar rsync \
-    gnupg curl\
-    bash-completion \
-    python3 python3-pip \
-    sudo git\
-  && apt-get clean \
-  && python3 -m pip install --upgrade pip \
-  && pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+WORKDIR /artifact
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates ./crates
+COPY src ./src
+COPY wasmtime ./wasmtime
 
-# set bash as default shell
-SHELL ["/bin/bash", "-c"]
-RUN source /root/.bashrc
-
-# install mongodb
-RUN curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | \
-sudo gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg \
---dearmor
-
-# install rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
-RUN echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
-
-RUN sudo apt-get update \
-  && sudo apt-get install -y mongodb-org
+RUN --mount=type=cache,target=/opt/cargo/registry \
+    --mount=type=cache,target=/opt/cargo/git \
+    --mount=type=cache,target=/artifact/target \
+    cargo build --locked --release --bin ir_generator \
+    && strip target/release/ir_generator \
+    && install --mode=0755 target/release/ir_generator /opt/clir
 
 
-RUN useradd -m ${USER} && yes ${PASSWD} | passwd ${USER}
+FROM ubuntu:${UBUNTU_VERSION} AS artifact
 
-# set sudo
-RUN echo ${USER}' ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
-RUN chmod 644 /etc/sudoers
+ARG MONGODB_MAJOR=7.0
+ENV DEBIAN_FRONTEND=noninteractive \
+    CLIR_ROOT=/artifact \
+    CLIR_OUTPUT=/output
+LABEL org.opencontainers.image.title="CLIR ISSTA 2026 Artifact" \
+      org.opencontainers.image.description="Liveness-driven and structure-aware Cranelift IR generator" \
+      org.opencontainers.image.source="https://github.com/security-pride/CLIR" \
+      org.opencontainers.image.licenses="MIT"
 
-# make workdir and binaries output dir
-RUN mkdir -p /home/${USER}/${WORKDIR}/
-COPY mongodb_ir /home/${USER}/mongodb_ir
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install --fix-missing --yes --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg \
+    && curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+        "https://www.mongodb.org/static/pgp/server-${MONGODB_MAJOR}.asc" \
+        | gpg --dearmor --output /usr/share/keyrings/mongodb-server.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/mongodb-server.gpg] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/${MONGODB_MAJOR} multiverse" \
+        > /etc/apt/sources.list.d/mongodb-org.list \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install --fix-missing --yes --no-install-recommends \
+        mongodb-database-tools \
+        mongodb-org-server
 
+RUN useradd --create-home --uid 1000 --shell /bin/bash clir \
+    && mkdir -p /artifact /output \
+    && chown clir:clir /output
 
+WORKDIR /artifact
+COPY --chown=clir:clir . .
+COPY --from=builder /opt/clir /usr/local/bin/clir
 
-COPY start.sh /start.sh
-RUN chmod +x /start.sh
-CMD ["/start.sh"]
+RUN chmod +x /artifact/start.sh /artifact/scripts/*.sh
 
-
-COPY . /home/${USER}/${WORKDIR}/
-
+USER clir
+ENTRYPOINT ["/artifact/scripts/entrypoint.sh"]
+CMD ["help"]

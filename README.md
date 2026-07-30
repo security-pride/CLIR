@@ -1,62 +1,119 @@
 # CLIR
 
-CLIR: Liveness-Driven and Structure-Aware Fuzzing for the Cranelift Compiler
+Artifact for **“CLIR: Liveness-Driven and Structure-Aware Fuzzing for the
+Cranelift Compiler”** (ISSTA 2026).
 
+CLIR generates random [Cranelift IR (CLIF)](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift)
+files. The repository includes the generator, architecture configurations, the
+preprocessed IR corpus, and the Wasmtime/Cranelift revision used by CLIR.
 
-## Overview
+## Build
 
-The **architecture-aware profiles** mentioned in the paper refer to the TOML configuration files located in the `configs/` directory. CLIR operates in two primary modes:
-
-* **`single` mode**: Corresponds to the **Target-Specific Mode** in the paper. It generates IR tailored to a single backend's full feature set.
-* **`compatible` mode**: Corresponds to the **Compatible Mode** in the paper. It computes the feature intersection of multiple profiles to generate portable IR for **differential testing**.
-
-
-## Getting Started
-
-1. Set environments.
-
-CLIR should run well on a server with Ubuntu 22.04.
-Please download [Docker](https://docs.docker.com/get-docker/) first.
-```bash
-sudo docker build -t clir .
-sudo docker run -it clir # run a docker container
-```
-
-2. Start generating cranelift ir files
+Build the Docker image from the repository root:
 
 ```bash
-# in the docker container 
-cd home/ubuntu/CLIR/
-cargo run --bin ir_generator
-# single mode example
-cargo run --bin ir_generator -- --num 1000 single configs/arch_x86.toml output
-# compatible mode example 
-cargo run --bin ir_generator -- --num 1000 compatible configs/arch_x86.toml configs/arch_aarch64.toml configs/arch_riscv64.toml configs/arch_s390x.toml output
+docker build -t clir .
 ```
 
-The generated IR files are stored in `home/ubuntu/CLIR/output`.
+## Generate Cranelift IR
 
+Create an output directory first:
 
-## Found Bugs
+```bash
+mkdir -p output
+```
 
-Within 72 hours of testing, **CLIR** discovered **24 unique bugs** in the Cranelift compiler, with **19 confirmed** and **9 fixed**.
+Generate 10 x86-64 test cases:
 
-> **Note on Issue Count:** The number of listed GitHub issues below may be fewer than the total number of unique bugs detected. This is because **multiple distinct bugs were consolidated into single tracking issues** by the maintainers (e.g., grouping similar crash patterns or architecture-specific failures) to facilitate efficient triage and fixing.
+```bash
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD/output:/output" \
+  clir single 10 /artifact/configs/arch_x86.toml /output/x86
+```
 
-[#10852](https://github.com/bytecodealliance/wasmtime/issues/10852)
-[#10906](https://github.com/bytecodealliance/wasmtime/issues/10906)
-[#10921](https://github.com/bytecodealliance/wasmtime/issues/10921)
-[#10929](https://github.com/bytecodealliance/wasmtime/issues/10929)
-[#10951](https://github.com/bytecodealliance/wasmtime/issues/10951)
-[#10976](https://github.com/bytecodealliance/wasmtime/issues/10976)
-[#10982](https://github.com/bytecodealliance/wasmtime/issues/10982)
-[#10996](https://github.com/bytecodealliance/wasmtime/issues/10996)
-[#11050](https://github.com/bytecodealliance/wasmtime/issues/11050)
-[#11133](https://github.com/bytecodealliance/wasmtime/issues/11133)
-[#11183](https://github.com/bytecodealliance/wasmtime/issues/11183)
-[#11233](https://github.com/bytecodealliance/wasmtime/issues/11233)
-[#11234](https://github.com/bytecodealliance/wasmtime/issues/11234)
-[#11240](https://github.com/bytecodealliance/wasmtime/issues/11240)
-[#12170](https://github.com/bytecodealliance/wasmtime/issues/12170)
-[#12195](https://github.com/bytecodealliance/wasmtime/issues/12195)
-[#12197](https://github.com/bytecodealliance/wasmtime/issues/12197)
+To target another architecture, replace the configuration file with one of:
+
+```text
+configs/arch_x86.toml
+configs/arch_aarch64.toml
+configs/arch_riscv64.toml
+configs/arch_s390x.toml
+```
+
+For example, on an AArch64 machine:
+
+```bash
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD/output:/output" \
+  clir single 10 /artifact/configs/arch_aarch64.toml /output/aarch64
+```
+
+CLIR produces three CLIF files for every generated program:
+
+```text
+cranelift_ir_0_none.clif
+cranelift_ir_0_speed.clif
+cranelift_ir_0_speed_and_size.clif
+```
+
+They contain the same program with different Cranelift optimization levels.
+
+CLIR also provides a compatible mode that generates shared programs for all
+four architectures:
+
+```bash
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD/output:/output" \
+  clir compatible 10 /output/compatible
+```
+
+Run `docker run --rm clir help` to see the other convenience commands.
+
+## Run a generated CLIF file
+
+The vendored `wasmtime/` directory contains Cranelift's command-line utility.
+Build it on the host:
+
+```bash
+cd wasmtime
+cargo build --release -p cranelift-tools --bin clif-util
+cd ..
+```
+
+The resulting executable is:
+
+```text
+wasmtime/target/release/clif-util
+```
+
+Run one generated file:
+
+```bash
+./wasmtime/target/release/clif-util run \
+  output/x86/cranelift_ir_0_none.clif
+```
+
+The generated CLIF files contain `; print: %main()`, so this command compiles
+the program to native code, runs `%main`, and prints its return value.
+
+The target in the CLIF file must match the host architecture. For example, run
+files generated with `arch_x86.toml` on x86-64 and files generated with
+`arch_aarch64.toml` on AArch64.
+
+To run the Cranelift file-test directives without executing the program:
+
+```bash
+./wasmtime/target/release/clif-util test \
+  output/x86/cranelift_ir_0_none.clif
+```
+
+## License
+
+CLIR is released under the [MIT License](License). The vendored Wasmtime source
+retains its upstream license in [`wasmtime/LICENSE`](wasmtime/LICENSE).
+
+Artifact environment requirements and badge information are recorded in
+[`REQUIREMENTS.md`](REQUIREMENTS.md) and [`STATUS`](STATUS).

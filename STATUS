@@ -1,0 +1,26 @@
+Requested badges
+================
+
+Artifacts Evaluated - Functional
+--------------------------------
+
+CLIR is packaged in a self-contained Docker image and includes the source,
+preprocessed IR corpus, architecture profiles, pinned Rust toolchain, automated
+database initialization, a smoke test, output validation, and documented
+reduced and full generation procedures.
+
+Artifacts Evaluated - Reusable
+-------------------------------
+
+The artifact exposes target-specific and compatible generation as separate
+commands, keeps architecture behavior in editable TOML profiles, documents the
+repository layout and output format, includes direct CLI and interactive-shell
+workflows, and provides a validator that can be reused for custom runs.
+
+Not requested in this version
+=============================
+
+Artifacts Available is not requested by this STATUS file because an archival
+DOI has not yet been recorded in the repository. Before requesting that badge,
+archive the evaluated release on a permanent repository such as Zenodo, add the
+DOI to README.md, and update this file.

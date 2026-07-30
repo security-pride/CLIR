@@ -1,0 +1,6 @@
+/target/
+/output/
+/outputs/
+/artifact-output/
+*.log
+.DS_Store
